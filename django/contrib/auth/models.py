@@ -72,6 +72,7 @@ class Permission(models.Model):
     name = models.CharField(_('name'), max_length=255)
     content_type = models.ForeignKey(ContentType)
     codename = models.CharField(_('codename'), max_length=100)
+    modified = models.DateTimeField(auto_now=True)
     objects = PermissionManager()
 
     class Meta:
@@ -121,6 +122,7 @@ class Group(models.Model):
     name = models.CharField(_('name'), max_length=80, unique=True)
     permissions = models.ManyToManyField(Permission,
         verbose_name=_('permissions'), blank=True)
+    modified = models.DateTimeField(auto_now=True)
 
     objects = GroupManager()
 
@@ -374,8 +376,8 @@ class AbstractUser(AbstractBaseUser, PermissionsMixin):
 
     Username, password and email are required. Other fields are optional.
     """
-    username = models.CharField(_('username'), max_length=30, unique=True,
-        help_text=_('Required. 30 characters or fewer. Letters, numbers and '
+    username = models.CharField(_('username'), max_length=255, unique=True,
+        help_text=_('Required. 255 characters or fewer. Letters, numbers and '
                     '@/./+/-/_ characters'),
         validators=[
             validators.RegexValidator(re.compile('^[\w.@+-]+$'), _('Enter a valid username.'), 'invalid')
@@ -390,6 +392,7 @@ class AbstractUser(AbstractBaseUser, PermissionsMixin):
         help_text=_('Designates whether this user should be treated as '
                     'active. Unselect this instead of deleting accounts.'))
     date_joined = models.DateTimeField(_('date joined'), default=timezone.now)
+    modified = models.DateTimeField(auto_now=True)
 
     objects = UserManager()
 
