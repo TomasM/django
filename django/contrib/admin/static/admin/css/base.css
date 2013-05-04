@@ -236,6 +236,13 @@ p img, h1 img, h2 img, h3 img, h4 img, td img {
     white-space: nowrap;
 }
 
+#changelist .nowrap {
+    white-space: normal;
+}
+#changelist table thead th {
+    white-space: normal !important;
+}
+
 /* TABLES */
 
 table {
