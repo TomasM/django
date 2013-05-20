@@ -27,7 +27,8 @@ IS_POPUP_VAR = 'pop'
 ERROR_FLAG = 'e'
 
 IGNORED_PARAMS = (
-    ALL_VAR, ORDER_VAR, ORDER_TYPE_VAR, SEARCH_VAR, IS_POPUP_VAR, TO_FIELD_VAR)
+    ALL_VAR, ORDER_VAR, ORDER_TYPE_VAR, SEARCH_VAR, IS_POPUP_VAR, TO_FIELD_VAR,
+    '_iframe', '_master_category_id', '_slave_category_id', '_parameter_id', '_product_id')
 
 # Text to display within change-list table cells if the value is blank.
 EMPTY_CHANGELIST_VALUE = ugettext_lazy('(None)')
