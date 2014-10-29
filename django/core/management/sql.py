@@ -144,6 +144,7 @@ def sql_all(app, style, connection):
 
 
 def _split_statements(content):
+    return [content]
     comment_re = re.compile(r"^((?:'[^']*'|[^'])*?)--.*$")
     statements = []
     statement = []
