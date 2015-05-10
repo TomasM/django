@@ -2,6 +2,7 @@
 *.pot
 *.py[co]
 *.swp
+__pycache__
 MANIFEST
 dist/
 docs/_build/
