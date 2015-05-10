@@ -1,9 +1,16 @@
 from __future__ import unicode_literals
 
-from django import template
-from django.utils.unittest import TestCase
+from unittest import TestCase
+
+from django.template import Context, Engine
+
 
 class CallableVariablesTests(TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.engine = Engine()
+        super(CallableVariablesTests, cls).setUpClass()
 
     def test_callable(self):
 
@@ -11,17 +18,18 @@ class CallableVariablesTests(TestCase):
             def __init__(self, value):
                 self.num_calls = 0
                 self.value = value
+
             def __call__(self):
                 self.num_calls += 1
                 return {"the_value": self.value}
 
         my_doodad = Doodad(42)
-        c = template.Context({"my_doodad": my_doodad})
+        c = Context({"my_doodad": my_doodad})
 
         # We can't access ``my_doodad.value`` in the template, because
         # ``my_doodad.__call__`` will be invoked first, yielding a dictionary
         # without a key ``value``.
-        t = template.Template('{{ my_doodad.value }}')
+        t = self.engine.from_string('{{ my_doodad.value }}')
         self.assertEqual(t.render(c), '')
 
         # We can confirm that the doodad has been called
@@ -29,7 +37,7 @@ class CallableVariablesTests(TestCase):
 
         # But we can access keys on the dict that's returned
         # by ``__call__``, instead.
-        t = template.Template('{{ my_doodad.the_value }}')
+        t = self.engine.from_string('{{ my_doodad.the_value }}')
         self.assertEqual(t.render(c), '42')
         self.assertEqual(my_doodad.num_calls, 2)
 
@@ -37,21 +45,23 @@ class CallableVariablesTests(TestCase):
 
         class Doodad(object):
             alters_data = True
+
             def __init__(self, value):
                 self.num_calls = 0
                 self.value = value
+
             def __call__(self):
                 self.num_calls += 1
                 return {"the_value": self.value}
 
         my_doodad = Doodad(42)
-        c = template.Context({"my_doodad": my_doodad})
+        c = Context({"my_doodad": my_doodad})
 
         # Since ``my_doodad.alters_data`` is True, the template system will not
-        # try to call our doodad but will use TEMPLATE_STRING_IF_INVALID
-        t = template.Template('{{ my_doodad.value }}')
+        # try to call our doodad but will use string_if_invalid
+        t = self.engine.from_string('{{ my_doodad.value }}')
         self.assertEqual(t.render(c), '')
-        t = template.Template('{{ my_doodad.the_value }}')
+        t = self.engine.from_string('{{ my_doodad.the_value }}')
         self.assertEqual(t.render(c), '')
 
         # Double-check that the object was really never called during the
@@ -62,23 +72,25 @@ class CallableVariablesTests(TestCase):
 
         class Doodad(object):
             do_not_call_in_templates = True
+
             def __init__(self, value):
                 self.num_calls = 0
                 self.value = value
+
             def __call__(self):
                 self.num_calls += 1
                 return {"the_value": self.value}
 
         my_doodad = Doodad(42)
-        c = template.Context({"my_doodad": my_doodad})
+        c = Context({"my_doodad": my_doodad})
 
         # Since ``my_doodad.do_not_call_in_templates`` is True, the template
         # system will not try to call our doodad.  We can access its attributes
         # as normal, and we don't have access to the dict that it returns when
         # called.
-        t = template.Template('{{ my_doodad.value }}')
+        t = self.engine.from_string('{{ my_doodad.value }}')
         self.assertEqual(t.render(c), '42')
-        t = template.Template('{{ my_doodad.the_value }}')
+        t = self.engine.from_string('{{ my_doodad.the_value }}')
         self.assertEqual(t.render(c), '')
 
         # Double-check that the object was really never called during the
@@ -93,19 +105,21 @@ class CallableVariablesTests(TestCase):
         class Doodad(object):
             do_not_call_in_templates = True
             alters_data = True
+
             def __init__(self, value):
                 self.num_calls = 0
                 self.value = value
+
             def __call__(self):
                 self.num_calls += 1
                 return {"the_value": self.value}
 
         my_doodad = Doodad(42)
-        c = template.Context({"my_doodad": my_doodad})
+        c = Context({"my_doodad": my_doodad})
 
-        t = template.Template('{{ my_doodad.value }}')
+        t = self.engine.from_string('{{ my_doodad.value }}')
         self.assertEqual(t.render(c), '42')
-        t = template.Template('{{ my_doodad.the_value }}')
+        t = self.engine.from_string('{{ my_doodad.the_value }}')
         self.assertEqual(t.render(c), '')
 
         # Double-check that the object was really never called during the

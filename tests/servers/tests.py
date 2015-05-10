@@ -5,20 +5,16 @@ Tests for django.core.servers.
 from __future__ import unicode_literals
 
 import os
-try:
-    from urllib.request import urlopen, HTTPError
-except ImportError:     # Python 2
-    from urllib2 import urlopen, HTTPError
+import socket
 
 from django.core.exceptions import ImproperlyConfigured
-from django.test import LiveServerTestCase
-from django.core.servers.basehttp import WSGIServerException
-from django.test.utils import override_settings
-from django.utils.http import urlencode
+from django.test import LiveServerTestCase, override_settings
 from django.utils._os import upath
+from django.utils.http import urlencode
+from django.utils.six.moves.urllib.error import HTTPError
+from django.utils.six.moves.urllib.request import urlopen
 
 from .models import Person
-
 
 TEST_ROOT = os.path.dirname(upath(__file__))
 TEST_SETTINGS = {
@@ -29,22 +25,16 @@ TEST_SETTINGS = {
 }
 
 
+@override_settings(ROOT_URLCONF='servers.urls', **TEST_SETTINGS)
 class LiveServerBase(LiveServerTestCase):
-    urls = 'servers.urls'
+
+    available_apps = [
+        'servers',
+        'django.contrib.auth',
+        'django.contrib.contenttypes',
+        'django.contrib.sessions',
+    ]
     fixtures = ['testdata.json']
-
-    @classmethod
-    def setUpClass(cls):
-        # Override settings
-        cls.settings_override = override_settings(**TEST_SETTINGS)
-        cls.settings_override.enable()
-        super(LiveServerBase, cls).setUpClass()
-
-    @classmethod
-    def tearDownClass(cls):
-        # Restore original settings
-        cls.settings_override.disable()
-        super(LiveServerBase, cls).tearDownClass()
 
     def urlopen(self, url):
         return urlopen(self.live_server_url + url)
@@ -66,7 +56,7 @@ class LiveServerAddress(LiveServerBase):
         cls.raises_exception('localhost', ImproperlyConfigured)
 
         # The host must be valid
-        cls.raises_exception('blahblahblah:8081', WSGIServerException)
+        cls.raises_exception('blahblahblah:8081', socket.error)
 
         # The list of ports must be in a valid format
         cls.raises_exception('localhost:8081,', ImproperlyConfigured)
@@ -75,18 +65,16 @@ class LiveServerAddress(LiveServerBase):
         cls.raises_exception('localhost:8081-blah', ImproperlyConfigured)
         cls.raises_exception('localhost:8081-8082-8083', ImproperlyConfigured)
 
-        # If contrib.staticfiles isn't configured properly, the exception
-        # should bubble up to the main thread.
-        old_STATIC_URL = TEST_SETTINGS['STATIC_URL']
-        TEST_SETTINGS['STATIC_URL'] = None
-        cls.raises_exception('localhost:8081', ImproperlyConfigured)
-        TEST_SETTINGS['STATIC_URL'] = old_STATIC_URL
-
         # Restore original environment variable
         if address_predefined:
             os.environ['DJANGO_LIVE_TEST_SERVER_ADDRESS'] = old_address
         else:
             del os.environ['DJANGO_LIVE_TEST_SERVER_ADDRESS']
+
+    @classmethod
+    def tearDownClass(cls):
+        # skip it, as setUpClass doesn't call its parent either
+        pass
 
     @classmethod
     def raises_exception(cls, address, exception):
@@ -101,8 +89,9 @@ class LiveServerAddress(LiveServerBase):
 
     def test_test_test(self):
         # Intentionally empty method so that the test is picked up by the
-        # test runner and the overriden setUpClass() method is executed.
+        # test runner and the overridden setUpClass() method is executed.
         pass
+
 
 class LiveServerViews(LiveServerBase):
     def test_404(self):
@@ -132,6 +121,19 @@ class LiveServerViews(LiveServerBase):
         """
         f = self.urlopen('/static/example_static_file.txt')
         self.assertEqual(f.read().rstrip(b'\r\n'), b'example static file')
+
+    def test_no_collectstatic_emulation(self):
+        """
+        Test that LiveServerTestCase reports a 404 status code when HTTP client
+        tries to access a static file that isn't explicitly put under
+        STATIC_ROOT.
+        """
+        try:
+            self.urlopen('/static/another_app/another_app_static_file.txt')
+        except HTTPError as err:
+            self.assertEqual(err.code, 404, 'Expected 404 response')
+        else:
+            self.fail('Expected 404 response (got %d)' % err.code)
 
     def test_media_files(self):
         """

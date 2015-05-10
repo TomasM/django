@@ -29,6 +29,14 @@ you're releasing the source code for your project, a common practice is to
 publish suitable settings for development, and to use a private settings
 module for production.
 
+Run ``manage.py check --deploy``
+================================
+
+Some of the checks described below can be automated using the
+:djadminopt:`--deploy` option of the :djadmin:`check` command. Be sure to run it
+against your production settings file as described in the option's
+documentation.
+
 Critical settings
 =================
 
@@ -86,6 +94,9 @@ and in production.
 
 Cache servers often have weak authentication. Make sure they only accept
 connections from your application servers.
+
+If you're using Memcached, consider using :ref:`cached sessions
+<cached-sessions-backend>` to improve performance.
 
 :setting:`DATABASES`
 --------------------
@@ -157,8 +168,18 @@ Performance optimizations
 Setting :setting:`DEBUG = False <DEBUG>` disables several features that are
 only useful in development. In addition, you can tune the following settings.
 
-:setting:`TEMPLATE_LOADERS`
----------------------------
+:setting:`CONN_MAX_AGE`
+-----------------------
+
+Enabling :ref:`persistent database connections
+<persistent-database-connections>` can result in a nice speed-up when
+connecting to the database accounts for a significant part of the request
+processing time.
+
+This helps a lot on virtualized hosts with limited network performance.
+
+:setting:`TEMPLATES`
+--------------------
 
 Enabling the cached template loader often improves performance drastically, as
 it avoids compiling each template every time it needs to be rendered. See the
@@ -196,10 +217,32 @@ See :doc:`/howto/error-reporting` for details on error reporting by email.
 
     .. _Sentry: http://sentry.readthedocs.org/en/latest/
 
-Miscellaneous
-=============
+Customize the default error views
+---------------------------------
 
-:setting:`ALLOWED_INCLUDE_ROOTS`
---------------------------------
+Django includes default views and templates for several HTTP error codes. You
+may want to override the default templates by creating the following templates
+in your root template directory: ``404.html``, ``500.html``, ``403.html``, and
+``400.html``. The default views should suffice for 99% of Web applications, but
+if you desire to customize them, see these instructions which also contain
+details about the default templates:
 
-This setting is required if you're using the :ttag:`ssi` template tag.
+* :ref:`http_not_found_view`
+* :ref:`http_internal_server_error_view`
+* :ref:`http_forbidden_view`
+* :ref:`http_bad_request_view`
+
+Python Options
+==============
+
+It's strongly recommended that you invoke the Python process running your
+Django application using the `-R`_ option or with the
+:envvar:`PYTHONHASHSEED` environment variable set to ``random``.
+
+These options help protect your site from denial-of-service (DoS)
+attacks triggered by carefully crafted inputs. Such an attack can
+drastically increase CPU usage by causing worst-case performance when
+creating ``dict`` instances. See `oCERT advisory #2011-003
+<http://www.ocert.org/advisories/ocert-2011-003.html>`_ for more information.
+
+.. _-r: https://docs.python.org/using/cmdline.html#cmdoption-R

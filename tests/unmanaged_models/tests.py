@@ -1,9 +1,9 @@
-from __future__ import absolute_import
+from __future__ import unicode_literals
 
 from django.db import connection
 from django.test import TestCase
 
-from .models import A01, A02, B01, B02, C01, C02, Unmanaged2, Managed1
+from .models import A01, A02, B01, B02, C01, C02, Managed1, Unmanaged2
 
 
 class SimpleTests(TestCase):
@@ -23,14 +23,14 @@ class SimpleTests(TestCase):
 
         # ... and pull it out via the other set.
         a2 = A02.objects.all()[0]
-        self.assertTrue(isinstance(a2, A02))
+        self.assertIsInstance(a2, A02)
         self.assertEqual(a2.f_a, "foo")
 
         b2 = B02.objects.all()[0]
-        self.assertTrue(isinstance(b2, B02))
+        self.assertIsInstance(b2, B02)
         self.assertEqual(b2.f_a, "fred")
 
-        self.assertTrue(isinstance(b2.fk_a, A02))
+        self.assertIsInstance(b2.fk_a, A02)
         self.assertEqual(b2.fk_a.f_a, "foo")
 
         self.assertEqual(list(C02.objects.filter(f_a=None)), [])
@@ -38,7 +38,7 @@ class SimpleTests(TestCase):
         resp = list(C02.objects.filter(mm_a=a.id))
         self.assertEqual(len(resp), 1)
 
-        self.assertTrue(isinstance(resp[0], C02))
+        self.assertIsInstance(resp[0], C02)
         self.assertEqual(resp[0].f_a, 'barney')
 
 
@@ -50,7 +50,7 @@ class ManyToManyUnmanagedTests(TestCase):
         """
         table = Unmanaged2._meta.get_field('mm').m2m_db_table()
         tables = connection.introspection.table_names()
-        self.assertTrue(table not in tables, "Table '%s' should not exist, but it does." % table)
+        self.assertNotIn(table, tables, "Table '%s' should not exist, but it does." % table)
 
     def test_many_to_many_between_unmanaged_and_managed(self):
         """
@@ -58,4 +58,4 @@ class ManyToManyUnmanagedTests(TestCase):
         """
         table = Managed1._meta.get_field('mm').m2m_db_table()
         tables = connection.introspection.table_names()
-        self.assertTrue(table in tables, "Table '%s' does not exist." % table)
+        self.assertIn(table, tables, "Table '%s' does not exist." % table)

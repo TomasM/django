@@ -1,15 +1,12 @@
 import hashlib
 import logging
 import re
-import warnings
 
-from django.conf import settings
-from django.core.mail import mail_managers
-from django.core import urlresolvers
 from django import http
-from django.utils.http import urlquote
-from django.utils import six
-
+from django.conf import settings
+from django.core import urlresolvers
+from django.core.mail import mail_managers
+from django.utils.encoding import force_text
 
 logger = logging.getLogger('django.request')
 
@@ -30,10 +27,15 @@ class CommonMiddleware(object):
               urlpatterns, then an HTTP-redirect is returned to this new URL;
               otherwise the initial URL is processed as usual.
 
+          This behavior can be customized by subclassing CommonMiddleware and
+          overriding the response_redirect_class attribute.
+
         - ETags: If the USE_ETAGS setting is set, ETags will be calculated from
           the entire page content and Not Modified responses will be returned
           appropriately.
     """
+
+    response_redirect_class = http.HttpResponsePermanentRedirect
 
     def process_request(self, request):
         """
@@ -56,7 +58,7 @@ class CommonMiddleware(object):
         # Check for a redirect based on settings.APPEND_SLASH
         # and settings.PREPEND_WWW
         host = request.get_host()
-        old_url = [host, request.path]
+        old_url = [host, request.get_full_path()]
         new_url = old_url[:]
 
         if (settings.PREPEND_WWW and old_url[0] and
@@ -69,49 +71,31 @@ class CommonMiddleware(object):
             urlconf = getattr(request, 'urlconf', None)
             if (not urlresolvers.is_valid_path(request.path_info, urlconf) and
                     urlresolvers.is_valid_path("%s/" % request.path_info, urlconf)):
-                new_url[1] = new_url[1] + '/'
-                if settings.DEBUG and request.method == 'POST':
+                new_url[1] = request.get_full_path(force_append_slash=True)
+                if settings.DEBUG and request.method in ('POST', 'PUT', 'PATCH'):
                     raise RuntimeError((""
-                    "You called this URL via POST, but the URL doesn't end "
+                    "You called this URL via %(method)s, but the URL doesn't end "
                     "in a slash and you have APPEND_SLASH set. Django can't "
-                    "redirect to the slash URL while maintaining POST data. "
-                    "Change your form to point to %s%s (note the trailing "
+                    "redirect to the slash URL while maintaining %(method)s data. "
+                    "Change your form to point to %(url)s (note the trailing "
                     "slash), or set APPEND_SLASH=False in your Django "
-                    "settings.") % (new_url[0], new_url[1]))
+                    "settings.") % {'method': request.method, 'url': ''.join(new_url)})
 
         if new_url == old_url:
             # No redirects required.
             return
-        if new_url[0]:
+        if new_url[0] != old_url[0]:
             newurl = "%s://%s%s" % (
-                request.is_secure() and 'https' or 'http',
-                new_url[0], urlquote(new_url[1]))
+                request.scheme,
+                new_url[0], new_url[1])
         else:
-            newurl = urlquote(new_url[1])
-        if request.META.get('QUERY_STRING', ''):
-            if six.PY3:
-                newurl += '?' + request.META['QUERY_STRING']
-            else:
-                # `query_string` is a bytestring. Appending it to the unicode
-                # string `newurl` will fail if it isn't ASCII-only. This isn't
-                # allowed; only broken software generates such query strings.
-                # Better drop the invalid query string than crash (#15152).
-                try:
-                    newurl += '?' + request.META['QUERY_STRING'].decode()
-                except UnicodeDecodeError:
-                    pass
-        return http.HttpResponsePermanentRedirect(newurl)
+            newurl = new_url[1]
+        return self.response_redirect_class(newurl)
 
     def process_response(self, request, response):
         """
         Calculate the ETag, if needed.
         """
-        if settings.SEND_BROKEN_LINK_EMAILS:
-            warnings.warn("SEND_BROKEN_LINK_EMAILS is deprecated. "
-                "Use BrokenLinkEmailsMiddleware instead.",
-                PendingDeprecationWarning, stacklevel=2)
-            BrokenLinkEmailsMiddleware().process_response(request, response)
-
         if settings.USE_ETAGS:
             if response.has_header('ETag'):
                 etag = response['ETag']
@@ -121,7 +105,7 @@ class CommonMiddleware(object):
                 etag = '"%s"' % hashlib.md5(response.content).hexdigest()
             if etag is not None:
                 if (200 <= response.status_code < 300
-                    and request.META.get('HTTP_IF_NONE_MATCH') == etag):
+                        and request.META.get('HTTP_IF_NONE_MATCH') == etag):
                     cookies = response.cookies
                     response = http.HttpResponseNotModified()
                     response.cookies = cookies
@@ -140,16 +124,18 @@ class BrokenLinkEmailsMiddleware(object):
         if response.status_code == 404 and not settings.DEBUG:
             domain = request.get_host()
             path = request.get_full_path()
-            referer = request.META.get('HTTP_REFERER', '')
-            is_internal = self.is_internal_request(domain, referer)
-            is_not_search_engine = '?' not in referer
-            is_ignorable = self.is_ignorable_404(path)
-            if referer and (is_internal or is_not_search_engine) and not is_ignorable:
-                ua = request.META.get('HTTP_USER_AGENT', '<none>')
+            referer = force_text(request.META.get('HTTP_REFERER', ''), errors='replace')
+
+            if not self.is_ignorable_request(request, path, domain, referer):
+                ua = force_text(request.META.get('HTTP_USER_AGENT', '<none>'), errors='replace')
                 ip = request.META.get('REMOTE_ADDR', '<none>')
                 mail_managers(
-                    "Broken %slink on %s" % (('INTERNAL ' if is_internal else ''), domain),
-                    "Referrer: %s\nRequested URL: %s\nUser agent: %s\nIP address: %s\n" % (referer, path, ua, ip),
+                    "Broken %slink on %s" % (
+                        ('INTERNAL ' if self.is_internal_request(domain, referer) else ''),
+                        domain
+                    ),
+                    "Referrer: %s\nRequested URL: %s\nUser agent: %s\n"
+                    "IP address: %s\n" % (referer, path, ua, ip),
                     fail_silently=True)
         return response
 
@@ -158,10 +144,14 @@ class BrokenLinkEmailsMiddleware(object):
         Returns True if the referring URL is the same domain as the current request.
         """
         # Different subdomains are treated as different domains.
-        return re.match("^https?://%s/" % re.escape(domain), referer)
+        return bool(re.match("^https?://%s/" % re.escape(domain), referer))
 
-    def is_ignorable_404(self, uri):
+    def is_ignorable_request(self, request, uri, domain, referer):
         """
-        Returns True if a 404 at the given URL *shouldn't* notify the site managers.
+        Returns True if the given request *shouldn't* notify the site managers.
         """
+        # '?' in referer is identified as search engine source
+        if (not referer or
+                (not self.is_internal_request(domain, referer) and '?' in referer)):
+            return True
         return any(pattern.search(uri) for pattern in settings.IGNORABLE_404_URLS)

@@ -1,5 +1,3 @@
-.. _ref-contrib-gis:
-
 =========
 GeoDjango
 =========
@@ -18,7 +16,9 @@ of spatially enabled data.
    install/index
    model-api
    db-api
+   forms-api
    geoquerysets
+   functions
    measure
    geos
    gdal

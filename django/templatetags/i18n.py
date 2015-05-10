@@ -1,15 +1,12 @@
 from __future__ import unicode_literals
-import re
+
 import sys
 
 from django.conf import settings
-from django.template import (Node, Variable, TemplateSyntaxError,
-    TokenParser, Library, TOKEN_TEXT, TOKEN_VAR)
-from django.template.base import render_value_in_context
+from django.template import Library, Node, TemplateSyntaxError, Variable
+from django.template.base import TOKEN_TEXT, TOKEN_VAR, render_value_in_context
 from django.template.defaulttags import token_kwargs
-from django.utils import six
-from django.utils import translation
-
+from django.utils import six, translation
 
 register = Library()
 
@@ -97,14 +94,16 @@ class TranslateNode(Node):
 
 
 class BlockTranslateNode(Node):
+
     def __init__(self, extra_context, singular, plural=None, countervar=None,
-            counter=None, message_context=None):
+            counter=None, message_context=None, trimmed=False):
         self.extra_context = extra_context
         self.singular = singular
         self.plural = plural
         self.countervar = countervar
         self.counter = counter
         self.message_context = message_context
+        self.trimmed = trimmed
 
     def render_token_list(self, tokens):
         result = []
@@ -115,7 +114,10 @@ class BlockTranslateNode(Node):
             elif token.token_type == TOKEN_VAR:
                 result.append('%%(%s)s' % token.contents)
                 vars.append(token.contents)
-        return ''.join(result), vars
+        msg = ''.join(result)
+        if self.trimmed:
+            msg = translation.trim_whitespace(msg)
+        return msg, vars
 
     def render(self, context, nested=False):
         if self.message_context:
@@ -144,10 +146,16 @@ class BlockTranslateNode(Node):
                 result = translation.pgettext(message_context, singular)
             else:
                 result = translation.ugettext(singular)
-        default_value = settings.TEMPLATE_STRING_IF_INVALID
-        render_value = lambda v: render_value_in_context(
-            context.get(v, default_value), context)
-        data = dict([(v, render_value(v)) for v in vars])
+        default_value = context.template.engine.string_if_invalid
+
+        def render_value(key):
+            if key in context:
+                val = context[key]
+            else:
+                val = default_value % key if '%s' in default_value else default_value
+            return render_value_in_context(val, context)
+
+        data = {v: render_value(v) for v in vars}
         context.pop()
         try:
             result = result % data
@@ -195,6 +203,7 @@ def do_get_available_languages(parser, token):
         raise TemplateSyntaxError("'get_available_languages' requires 'as variable' (got %r)" % args)
     return GetAvailableLanguagesNode(args[2])
 
+
 @register.tag("get_language_info")
 def do_get_language_info(parser, token):
     """
@@ -214,12 +223,13 @@ def do_get_language_info(parser, token):
         raise TemplateSyntaxError("'%s' requires 'for string as variable' (got %r)" % (args[0], args[1:]))
     return GetLanguageInfoNode(parser.compile_filter(args[2]), args[4])
 
+
 @register.tag("get_language_info_list")
 def do_get_language_info_list(parser, token):
     """
     This will store a list of language information dictionaries for the given
     language codes in a context variable. The language codes can be specified
-    either as a list of strings or a settings.LANGUAGES style tuple (or any
+    either as a list of strings or a settings.LANGUAGES style list (or any
     sequence of sequences whose first items are language codes).
 
     Usage::
@@ -237,17 +247,21 @@ def do_get_language_info_list(parser, token):
         raise TemplateSyntaxError("'%s' requires 'for sequence as variable' (got %r)" % (args[0], args[1:]))
     return GetLanguageInfoListNode(parser.compile_filter(args[2]), args[4])
 
+
 @register.filter
 def language_name(lang_code):
     return translation.get_language_info(lang_code)['name']
+
 
 @register.filter
 def language_name_local(lang_code):
     return translation.get_language_info(lang_code)['name_local']
 
+
 @register.filter
 def language_bidi(lang_code):
     return translation.get_language_info(lang_code)['bidi']
+
 
 @register.tag("get_current_language")
 def do_get_current_language(parser, token):
@@ -268,6 +282,7 @@ def do_get_current_language(parser, token):
         raise TemplateSyntaxError("'get_current_language' requires 'as variable' (got %r)" % args)
     return GetCurrentLanguageNode(args[2])
 
+
 @register.tag("get_current_language_bidi")
 def do_get_current_language_bidi(parser, token):
     """
@@ -286,6 +301,7 @@ def do_get_current_language_bidi(parser, token):
     if len(args) != 3 or args[1] != 'as':
         raise TemplateSyntaxError("'get_current_language_bidi' requires 'as variable' (got %r)" % args)
     return GetCurrentLanguageBidiNode(args[2])
+
 
 @register.tag("trans")
 def do_translate(parser, token):
@@ -329,42 +345,55 @@ def do_translate(parser, token):
 
     This is equivalent to calling pgettext instead of (u)gettext.
     """
-    class TranslateParser(TokenParser):
-        def top(self):
-            value = self.value()
+    bits = token.split_contents()
+    if len(bits) < 2:
+        raise TemplateSyntaxError("'%s' takes at least one argument" % bits[0])
+    message_string = parser.compile_filter(bits[1])
+    remaining = bits[2:]
 
-            # Backwards Compatiblity fix:
-            # FilterExpression does not support single-quoted strings,
-            # so we make a cheap localized fix in order to maintain
-            # backwards compatibility with existing uses of ``trans``
-            # where single quote use is supported.
-            if value[0] == "'":
-                m = re.match("^'([^']+)'(\|.*$)", value)
-                if m:
-                    value = '"%s"%s' % (m.group(1).replace('"','\\"'), m.group(2))
-                elif value[-1] == "'":
-                    value = '"%s"' % value[1:-1].replace('"','\\"')
+    noop = False
+    asvar = None
+    message_context = None
+    seen = set()
+    invalid_context = {'as', 'noop'}
 
-            noop = False
-            asvar = None
-            message_context = None
+    while remaining:
+        option = remaining.pop(0)
+        if option in seen:
+            raise TemplateSyntaxError(
+                "The '%s' option was specified more than once." % option,
+            )
+        elif option == 'noop':
+            noop = True
+        elif option == 'context':
+            try:
+                value = remaining.pop(0)
+            except IndexError:
+                msg = "No argument provided to the '%s' tag for the context option." % bits[0]
+                six.reraise(TemplateSyntaxError, TemplateSyntaxError(msg), sys.exc_info()[2])
+            if value in invalid_context:
+                raise TemplateSyntaxError(
+                    "Invalid argument '%s' provided to the '%s' tag for the context option" % (value, bits[0]),
+                )
+            message_context = parser.compile_filter(value)
+        elif option == 'as':
+            try:
+                value = remaining.pop(0)
+            except IndexError:
+                msg = "No argument provided to the '%s' tag for the as option." % bits[0]
+                six.reraise(TemplateSyntaxError, TemplateSyntaxError(msg), sys.exc_info()[2])
+            asvar = value
+        else:
+            raise TemplateSyntaxError(
+                "Unknown argument for '%s' tag: '%s'. The only options "
+                "available are 'noop', 'context' \"xxx\", and 'as VAR'." % (
+                    bits[0], option,
+                )
+            )
+        seen.add(option)
 
-            while self.more():
-                tag = self.tag()
-                if tag == 'noop':
-                    noop = True
-                elif tag == 'context':
-                    message_context = parser.compile_filter(self.value())
-                elif tag == 'as':
-                    asvar = self.tag()
-                else:
-                    raise TemplateSyntaxError(
-                        "Only options for 'trans' are 'noop', " \
-                        "'context \"xxx\"', and 'as VAR'.")
-            return value, noop, asvar, message_context
-    value, noop, asvar, message_context = TranslateParser(token.contents).top()
-    return TranslateNode(parser.compile_filter(value), noop, asvar,
-                         message_context)
+    return TranslateNode(message_string, noop, asvar, message_context)
+
 
 @register.tag("blocktrans")
 def do_block_translate(parser, token):
@@ -429,13 +458,15 @@ def do_block_translate(parser, token):
                     '"context" in %r tag expected '
                     'exactly one argument.') % bits[0]
                 six.reraise(TemplateSyntaxError, TemplateSyntaxError(msg), sys.exc_info()[2])
+        elif option == "trimmed":
+            value = True
         else:
             raise TemplateSyntaxError('Unknown argument for %r tag: %r.' %
                                       (bits[0], option))
         options[option] = value
 
     if 'count' in options:
-        countervar, counter = list(six.iteritems(options['count']))[0]
+        countervar, counter = list(options['count'].items())[0]
     else:
         countervar, counter = None, None
     if 'context' in options:
@@ -443,6 +474,8 @@ def do_block_translate(parser, token):
     else:
         message_context = None
     extra_context = options.get('with', {})
+
+    trimmed = options.get("trimmed", False)
 
     singular = []
     plural = []
@@ -465,7 +498,8 @@ def do_block_translate(parser, token):
         raise TemplateSyntaxError("'blocktrans' doesn't allow other block tags (seen %r) inside it" % token.contents)
 
     return BlockTranslateNode(extra_context, singular, plural, countervar,
-            counter, message_context)
+                              counter, message_context, trimmed=trimmed)
+
 
 @register.tag
 def language(parser, token):

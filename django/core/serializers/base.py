@@ -1,22 +1,31 @@
 """
 Module for abstract serializer/unserializer base classes.
 """
-
 from django.db import models
-from django.utils.encoding import smart_text
 from django.utils import six
+
 
 class SerializerDoesNotExist(KeyError):
     """The requested serializer was not found."""
     pass
 
+
 class SerializationError(Exception):
     """Something bad happened during serialization."""
     pass
 
+
 class DeserializationError(Exception):
     """Something bad happened during deserialization."""
-    pass
+
+    @classmethod
+    def WithData(cls, original_exc, model, fk, field_value):
+        """
+        Factory method for creating a deserialization error which has a more
+        explanatory messsage.
+        """
+        return cls("%s: (%s:pk=%s) field_value was '%s'" % (original_exc, model, fk, field_value))
+
 
 class Serializer(object):
     """
@@ -35,7 +44,8 @@ class Serializer(object):
 
         self.stream = options.pop("stream", six.StringIO())
         self.selected_fields = options.pop("fields", None)
-        self.use_natural_keys = options.pop("use_natural_keys", False)
+        self.use_natural_foreign_keys = options.pop('use_natural_foreign_keys', False)
+        self.use_natural_primary_keys = options.pop('use_natural_primary_keys', False)
 
         self.start_serialization()
         self.first = True
@@ -46,7 +56,7 @@ class Serializer(object):
             concrete_model = obj._meta.concrete_model
             for field in concrete_model._meta.local_fields:
                 if field.serialize:
-                    if field.rel is None:
+                    if field.remote_field is None:
                         if self.selected_fields is None or field.attname in self.selected_fields:
                             self.handle_field(obj, field)
                     else:
@@ -66,7 +76,7 @@ class Serializer(object):
         """
         Called when serializing of the queryset starts.
         """
-        raise NotImplementedError
+        raise NotImplementedError('subclasses of Serializer must provide a start_serialization() method')
 
     def end_serialization(self):
         """
@@ -78,7 +88,7 @@ class Serializer(object):
         """
         Called when serializing of an object starts.
         """
-        raise NotImplementedError
+        raise NotImplementedError('subclasses of Serializer must provide a start_object() method')
 
     def end_object(self, obj):
         """
@@ -90,19 +100,19 @@ class Serializer(object):
         """
         Called to handle each individual (non-relational) field on an object.
         """
-        raise NotImplementedError
+        raise NotImplementedError('subclasses of Serializer must provide an handle_field() method')
 
     def handle_fk_field(self, obj, field):
         """
         Called to handle a ForeignKey field.
         """
-        raise NotImplementedError
+        raise NotImplementedError('subclasses of Serializer must provide an handle_fk_field() method')
 
     def handle_m2m_field(self, obj, field):
         """
         Called to handle a ManyToManyField.
         """
-        raise NotImplementedError
+        raise NotImplementedError('subclasses of Serializer must provide an handle_m2m_field() method')
 
     def getvalue(self):
         """
@@ -111,6 +121,7 @@ class Serializer(object):
         """
         if callable(getattr(self.stream, 'getvalue', None)):
             return self.stream.getvalue()
+
 
 class Deserializer(six.Iterator):
     """
@@ -126,17 +137,14 @@ class Deserializer(six.Iterator):
             self.stream = six.StringIO(stream_or_string)
         else:
             self.stream = stream_or_string
-        # hack to make sure that the models have all been loaded before
-        # deserialization starts (otherwise subclass calls to get_model()
-        # and friends might fail...)
-        models.get_apps()
 
     def __iter__(self):
         return self
 
     def __next__(self):
         """Iteration iterface -- return the next item in the stream"""
-        raise NotImplementedError
+        raise NotImplementedError('subclasses of Deserializer must provide a __next__() method')
+
 
 class DeserializedObject(object):
     """
@@ -155,15 +163,13 @@ class DeserializedObject(object):
         self.m2m_data = m2m_data
 
     def __repr__(self):
-        return "<DeserializedObject: %s.%s(pk=%s)>" % (
-            self.object._meta.app_label, self.object._meta.object_name, self.object.pk)
+        return "<DeserializedObject: %s(pk=%s)>" % (
+            self.object._meta.label, self.object.pk)
 
     def save(self, save_m2m=True, using=None):
         # Call save on the Model baseclass directly. This bypasses any
         # model-defined save. The save is also forced to be raw.
-        # This ensures that the data that is deserialized is literally
-        # what came from the file, not post-processed by pre_save/save
-        # methods.
+        # raw=True is passed to any pre/post_save signals.
         models.Model.save_base(self.object, using=using, raw=True)
         if self.m2m_data and save_m2m:
             for accessor_name, object_list in self.m2m_data.items():
@@ -172,3 +178,21 @@ class DeserializedObject(object):
         # prevent a second (possibly accidental) call to save() from saving
         # the m2m data twice.
         self.m2m_data = None
+
+
+def build_instance(Model, data, db):
+    """
+    Build a model instance.
+
+    If the model instance doesn't have a primary key and the model supports
+    natural keys, try to retrieve it from the database.
+    """
+    obj = Model(**data)
+    if (obj.pk is None and hasattr(Model, 'natural_key') and
+            hasattr(Model._default_manager, 'get_by_natural_key')):
+        natural_key = obj.natural_key()
+        try:
+            obj.pk = Model._default_manager.db_manager(db).get_by_natural_key(*natural_key).pk
+        except Model.DoesNotExist:
+            pass
+    return obj

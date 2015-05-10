@@ -1,13 +1,19 @@
 import datetime
 import errno
+import logging
 import os
 import shutil
 import tempfile
 
 from django.conf import settings
-from django.contrib.sessions.backends.base import SessionBase, CreateError, VALID_KEY_CHARS
-from django.core.exceptions import SuspiciousOperation, ImproperlyConfigured
+from django.contrib.sessions.backends.base import (
+    VALID_KEY_CHARS, CreateError, SessionBase,
+)
+from django.contrib.sessions.exceptions import InvalidSessionKey
+from django.core.exceptions import ImproperlyConfigured, SuspiciousOperation
 from django.utils import timezone
+from django.utils.encoding import force_text
+
 
 class SessionStore(SessionBase):
     """
@@ -48,7 +54,7 @@ class SessionStore(SessionBase):
         # should always be md5s, so they should never contain directory
         # components.
         if not set(session_key).issubset(set(VALID_KEY_CHARS)):
-            raise SuspiciousOperation(
+            raise InvalidSessionKey(
                 "Invalid characters in session key")
 
         return os.path.join(self.storage_path, self.file_prefix + session_key)
@@ -75,7 +81,11 @@ class SessionStore(SessionBase):
             if file_data:
                 try:
                     session_data = self.decode(file_data)
-                except (EOFError, SuspiciousOperation):
+                except (EOFError, SuspiciousOperation) as e:
+                    if isinstance(e, SuspiciousOperation):
+                        logger = logging.getLogger('django.security.%s' %
+                                e.__class__.__name__)
+                        logger.warning(force_text(e))
                     self.create()
 
                 # Remove expired sessions.
@@ -86,7 +96,7 @@ class SessionStore(SessionBase):
                     session_data = {}
                     self.delete()
                     self.create()
-        except IOError:
+        except (IOError, SuspiciousOperation):
             self.create()
         return session_data
 
